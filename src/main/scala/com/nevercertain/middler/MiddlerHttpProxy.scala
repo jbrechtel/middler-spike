@@ -110,17 +110,46 @@ class ProxyLogger(fw: FileWriter) extends Actor with ActorLogging {
   }
 }
 
+object FrontEndHTTP {
+  def apply() = Props(new FrontEndHTTP)
+}
+
+class FrontEndHTTP extends Actor with ActorLogging {
+  import spray.http._
+  import spray.can.Http
+  import spray.http.HttpHeaders._
+  import spray.http.MediaTypes._
+
+  lazy val content = {
+    val stream = this.getClass.getClassLoader.getResourceAsStream("index.html")
+    io.Source.fromInputStream(stream).mkString
+  }
+
+  def receive = {
+    case Http.Connected(_, _) => sender ! Http.Register(self)
+    case HttpRequest(HttpMethods.GET, Uri.Path("/"), _, _, _) => {
+      val response = HttpResponse(entity = HttpEntity(ContentType(`text/html`), content))
+      sender ! response
+    }
+  }
+}
+
 sealed abstract class ProxyMessage
 case class ProxyRequest(data: ByteString) extends ProxyMessage
 case class ProxyResponse(data: ByteString) extends ProxyMessage
 
 object HttpProxyApp extends App {
-  val system = ActorSystem("http-proxy")
+  import spray.can.Http
+
+  implicit val system = ActorSystem("http-proxy")
   val endpoint = new InetSocketAddress("localhost", 9080)
-  val writer = new FileWriter("proxy.log")
   system.actorOf(HttpProxyService(endpoint))
+
+  val frontEnd = system.actorOf(FrontEndHTTP())
+  IO(Http) ! Http.Bind(frontEnd, interface = "localhost", port = 9081)
+
+  val writer = new FileWriter("proxy.log")
   val logger = system.actorOf(ProxyLogger(writer), "log")
-  println(logger.path)
 
   Console.readLine("Press enter to exit.")
   system.shutdown()
